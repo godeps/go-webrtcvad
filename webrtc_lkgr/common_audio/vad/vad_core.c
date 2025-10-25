@@ -249,6 +249,9 @@ static int16_t GmmProbability(VadInstT* self,
       // hard coded number of Gaussians set to two. Find a way to generalize.
       // Calculate local noise probabilities used later when updating the GMM.
       h0 = (int16_t)(h0_test >> 12);  // Q15
+      if (h0 == 0) {
+        h0 = 1;
+      }
       if (h0 > 0) {
         // High probability of noise. Assign conditional probabilities for each
         // Gaussian in the GMM.
@@ -263,6 +266,9 @@ static int16_t GmmProbability(VadInstT* self,
 
       // Calculate local speech probabilities used later when updating the GMM.
       h1 = (int16_t)(h1_test >> 12);  // Q15
+      if (h1 == 0) {
+        h1 = 1;
+      }
       if (h1 > 0) {
         // High probability of speech. Assign conditional probabilities for each
         // Gaussian in the GMM. Otherwise use the initialized values, i.e., 0.

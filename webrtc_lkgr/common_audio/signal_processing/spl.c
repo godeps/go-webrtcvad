@@ -1,8 +1,5 @@
 #include "common_audio/signal_processing/spl.h"
 
-int32_t webrtcvad_last_div_num = 0;
-int16_t webrtcvad_last_div_den = 0;
-
 const int8_t kWebRtcSpl_CountLeadingZeros32_Table[64] = {
     32, 8,  17, -1, -1, 14, -1, -1, -1, 20, -1, -1, -1, 28, -1, 18,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,  26, 25, 24,
@@ -113,8 +110,6 @@ uint32_t WebRtcSpl_DivU32U16(uint32_t num, uint16_t den) {
 }
 
 int32_t WebRtcSpl_DivW32W16(int32_t num, int16_t den) {
-  webrtcvad_last_div_num = num;
-  webrtcvad_last_div_den = den;
   // Guard against division with 0
   if (den == 0) {
     return (int32_t)0x7FFFFFFF;
@@ -164,8 +159,6 @@ int32_t WebRtcSpl_DivW32W16(int32_t num, int16_t den) {
 }
 
 int16_t WebRtcSpl_DivW32W16ResW16(int32_t num, int16_t den) {
-  webrtcvad_last_div_num = num;
-  webrtcvad_last_div_den = den;
   // Guard against division with 0
   if (den == 0) {
     return (int16_t)0x7FFF;

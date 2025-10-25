@@ -126,9 +126,6 @@ func Process(v VadInst, fs int, audioFrame []byte, frameLength int) (bool, error
 		uint64(uint32(frameLength)),
 	)
 	if err != nil {
-		if num, den, dbgErr := wc.lastDivArgs(ctx); dbgErr == nil {
-			return false, fmt.Errorf("wasm process call failed: %w (last_div num=%d den=%d)", err, num, den)
-		}
 		return false, fmt.Errorf("wasm process call failed: %w", err)
 	}
 

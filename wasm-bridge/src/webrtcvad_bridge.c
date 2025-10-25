@@ -3,9 +3,6 @@
 #include "export.h"
 #include "common_audio/vad/include/webrtc_vad.h"
 
-extern int32_t webrtcvad_last_div_num;
-extern int16_t webrtcvad_last_div_den;
-
 static inline VadInst* ptr_to_vad(uint32_t ptr) {
 	return (VadInst*)(uintptr_t)ptr;
 }
@@ -54,18 +51,4 @@ int32_t
 bridge_vad_valid_rate_and_frame_length(int32_t rate, uint32_t frame_length)
 {
 	return WebRtcVad_ValidRateAndFrameLength(rate, (size_t)frame_length);
-}
-
-EXPORT(bridge_debug_last_div_num)
-int32_t
-bridge_debug_last_div_num(void)
-{
-	return webrtcvad_last_div_num;
-}
-
-EXPORT(bridge_debug_last_div_den)
-int32_t
-bridge_debug_last_div_den(void)
-{
-	return (int32_t)webrtcvad_last_div_den;
 }

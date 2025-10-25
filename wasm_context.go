@@ -16,16 +16,14 @@ import (
 var vadWasmBinary []byte
 
 type wasmFunctions struct {
-	malloc   api.Function
-	free     api.Function
-	create   api.Function
-	destroy  api.Function
-	init     api.Function
-	setMode  api.Function
-	process  api.Function
-	valid    api.Function
-	debugNum api.Function
-	debugDen api.Function
+	malloc  api.Function
+	free    api.Function
+	create  api.Function
+	destroy api.Function
+	init    api.Function
+	setMode api.Function
+	process api.Function
+	valid   api.Function
 }
 
 type wasmContext struct {
@@ -79,16 +77,14 @@ func getWasmContext(ctx context.Context) (*wasmContext, error) {
 		}
 
 		functions := wasmFunctions{
-			malloc:   load("malloc"),
-			free:     load("free"),
-			create:   load("bridge_vad_create"),
-			destroy:  load("bridge_vad_free"),
-			init:     load("bridge_vad_init"),
-			setMode:  load("bridge_vad_set_mode"),
-			process:  load("bridge_vad_process"),
-			valid:    load("bridge_vad_valid_rate_and_frame_length"),
-			debugNum: load("bridge_debug_last_div_num"),
-			debugDen: load("bridge_debug_last_div_den"),
+			malloc:  load("malloc"),
+			free:    load("free"),
+			create:  load("bridge_vad_create"),
+			destroy: load("bridge_vad_free"),
+			init:    load("bridge_vad_init"),
+			setMode: load("bridge_vad_set_mode"),
+			process: load("bridge_vad_process"),
+			valid:   load("bridge_vad_valid_rate_and_frame_length"),
 		}
 
 		compiled.Close(ctx)
@@ -191,19 +187,4 @@ func (wc *wasmContext) writeToMemory(ctx context.Context, data []byte) (uint32, 
 		return 0, fmt.Errorf("failed to write %d bytes to wasm memory at %d", len(data), ptr)
 	}
 	return ptr, nil
-}
-
-func (wc *wasmContext) lastDivArgs(ctx context.Context) (int32, int32, error) {
-	if wc.functions.debugNum == nil || wc.functions.debugDen == nil {
-		return 0, 0, fmt.Errorf("debug functions unavailable")
-	}
-	num, err := wc.callInt32(ctx, wc.functions.debugNum)
-	if err != nil {
-		return 0, 0, err
-	}
-	den, err := wc.callInt32(ctx, wc.functions.debugDen)
-	if err != nil {
-		return 0, 0, err
-	}
-	return num, den, nil
 }
