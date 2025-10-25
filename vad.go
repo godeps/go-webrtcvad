@@ -1,69 +1,168 @@
 package webrtcvad
 
-// #cgo CPPFLAGS: -I${SRCDIR}/webrtc_lkgr
-// #include "common_audio/signal_processing/resample_by_2_internal.c"
-// #include "common_audio/signal_processing/spl.c"
-// #include "common_audio/vad/vad_filterbank.c"
-// #include "common_audio/vad/vad_core.c"
-// #include "common_audio/vad/vad_gmm.c"
-// #include "common_audio/vad/vad_sp.c"
-// #include "common_audio/vad/webrtc_vad.c"
-import "C"
 import (
+	"context"
 	"errors"
-	"unsafe"
+	"fmt"
 )
 
-type VadInst *C.struct_WebRtcVadInst
+// VadInst represents a VAD instance stored inside the wasm module.
+type VadInst struct {
+	ptr uint32
+}
 
-// Create Creates an instance to the VAD structure.
+// Create creates an instance of the WebRTC VAD.
+// If the underlying wasm runtime fails to initialise, an empty instance is returned.
 func Create() VadInst {
-	return VadInst(C.WebRtcVad_Create())
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return VadInst{}
+	}
+
+	ptr, err := wc.callUint32(ctx, wc.functions.create)
+	if err != nil || ptr == 0 {
+		return VadInst{}
+	}
+
+	return VadInst{ptr: ptr}
 }
 
-// Free Frees the dynamic memory of a specified VAD instance.
-func Free(vadInst VadInst) {
-	C.WebRtcVad_Free(vadInst)
+// Free releases the dynamic memory of a specified VAD instance.
+func Free(v VadInst) {
+	if v.ptr == 0 {
+		return
+	}
+
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return
+	}
+
+	_ = wc.callVoid(ctx, wc.functions.destroy, uint64(v.ptr))
 }
 
-// Init Initializes a VAD instance.
-func Init(vadInst VadInst) (err error) {
-	result := C.WebRtcVad_Init(vadInst)
+// Init initialises a VAD instance.
+func Init(v VadInst) error {
+	if v.ptr == 0 {
+		return errors.New("vad instance is uninitialised")
+	}
+
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, err := wc.callInt32(ctx, wc.functions.init, uint64(v.ptr))
+	if err != nil {
+		return fmt.Errorf("wasm init call failed: %w", err)
+	}
 	if result == -1 {
-		err = errors.New("null pointer or Default mode could not be set")
+		return errors.New("null pointer or default mode could not be set")
 	}
-	return
+	return nil
 }
 
-// SetMode Sets the VAD operating mode.
-func SetMode(vadInst VadInst, mode int) (err error) {
-	result := C.WebRtcVad_set_mode(vadInst, C.int(mode))
+// SetMode sets the VAD operating mode.
+func SetMode(v VadInst, mode int) error {
+	if v.ptr == 0 {
+		return errors.New("vad instance is uninitialised")
+	}
+
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, err := wc.callInt32(ctx, wc.functions.setMode, uint64(v.ptr), uint64(uint32(mode)))
+	if err != nil {
+		return fmt.Errorf("wasm set_mode call failed: %w", err)
+	}
 	if result == -1 {
-		err = errors.New("mode could not be set or the VAD instance has not been initialized")
+		return errors.New("mode could not be set or the VAD instance has not been initialized")
 	}
-	return
+	return nil
 }
 
-// Process Sets the VAD operating mode.
-func Process(vadInst VadInst, fs int, audioFrame []byte, frameLength int) (active bool, err error) {
-	result := C.WebRtcVad_Process(vadInst, C.int(fs), (*C.short)(unsafe.Pointer(&audioFrame[0])), C.size_t(frameLength))
-	if result == 1 {
-		active = true
-	} else if result == 0 {
-		active = false
-	} else {
-		err = errors.New("process fail")
+// Process returns whether the given frame is classified as active speech.
+func Process(v VadInst, fs int, audioFrame []byte, frameLength int) (bool, error) {
+	if v.ptr == 0 {
+		return false, errors.New("vad instance is uninitialised")
 	}
-	return
+
+	if frameLength <= 0 {
+		return false, fmt.Errorf("invalid frame length: %d", frameLength)
+	}
+
+	expectedBytes := frameLength * 2
+	if expectedBytes < 0 {
+		return false, errors.New("frame length overflow")
+	}
+	if len(audioFrame) < expectedBytes {
+		return false, fmt.Errorf("audio frame too short: have %d bytes, need %d bytes", len(audioFrame), expectedBytes)
+	}
+
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	framePtr, err := wc.writeToMemory(ctx, audioFrame[:expectedBytes])
+	if err != nil {
+		return false, err
+	}
+	defer wc.freeMemory(ctx, framePtr)
+
+	result, err := wc.callInt32(
+		ctx,
+		wc.functions.process,
+		uint64(v.ptr),
+		uint64(uint32(fs)),
+		uint64(framePtr),
+		uint64(uint32(frameLength)),
+	)
+	if err != nil {
+		if num, den, dbgErr := wc.lastDivArgs(ctx); dbgErr == nil {
+			return false, fmt.Errorf("wasm process call failed: %w (last_div num=%d den=%d)", err, num, den)
+		}
+		return false, fmt.Errorf("wasm process call failed: %w", err)
+	}
+
+	switch result {
+	case 1:
+		return true, nil
+	case 0:
+		return false, nil
+	default:
+		return false, errors.New("process fail")
+	}
 }
 
-// ValidRateAndFrameLength Sets the VAD operating mode.
-func ValidRateAndFrameLength(rate int, frameLength int) (valid bool) {
-	result := C.WebRtcVad_ValidRateAndFrameLength(C.int(rate), C.size_t(frameLength))
-	if result == 0 {
-		valid = true
-	} else {
-		valid = false
+// ValidRateAndFrameLength verifies the input rate and frame length.
+func ValidRateAndFrameLength(rate int, frameLength int) bool {
+	if frameLength < 0 {
+		return false
 	}
-	return
+
+	ctx := context.Background()
+	wc, err := getWasmContext(ctx)
+	if err != nil {
+		return false
+	}
+
+	result, err := wc.callInt32(
+		ctx,
+		wc.functions.valid,
+		uint64(uint32(rate)),
+		uint64(uint32(frameLength)),
+	)
+	if err != nil {
+		return false
+	}
+
+	return result == 0
 }

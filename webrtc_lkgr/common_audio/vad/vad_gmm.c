@@ -33,6 +33,11 @@ int32_t WebRtcVad_GaussianProbability(int16_t input,
   int16_t tmp16, inv_std, inv_std2, exp_value = 0;
   int32_t tmp32;
 
+  if (std == 0) {
+    *delta = 0;
+    return 0;
+  }
+
   // Calculate `inv_std` = 1 / s, in Q10.
   // 131072 = 1 in Q17, and (`std` >> 1) is for rounding instead of truncation.
   // Q-domain: Q17 / Q7 = Q10.

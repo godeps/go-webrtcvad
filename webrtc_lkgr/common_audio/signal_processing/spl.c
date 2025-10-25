@@ -1,5 +1,8 @@
 #include "common_audio/signal_processing/spl.h"
 
+int32_t webrtcvad_last_div_num = 0;
+int16_t webrtcvad_last_div_den = 0;
+
 const int8_t kWebRtcSpl_CountLeadingZeros32_Table[64] = {
     32, 8,  17, -1, -1, 14, -1, -1, -1, 20, -1, -1, -1, 28, -1, 18,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,  26, 25, 24,
@@ -89,30 +92,97 @@ void WebRtcSpl_Resample48khzTo8khz(const int16_t* in,
 }
 
 uint32_t WebRtcSpl_DivU32U16(uint32_t num, uint16_t den) {
-  // Guard against division with 0
-  if (den != 0) {
-    return (uint32_t)(num / den);
-  } else {
+  if (den == 0) {
     return (uint32_t)0xFFFFFFFF;
   }
+
+  uint32_t quotient = 0;
+  uint32_t remainder = 0;
+  uint32_t denominator = (uint32_t)den;
+
+  int i;
+  for (i = 31; i >= 0; --i) {
+    remainder = (remainder << 1) | ((num >> i) & 1u);
+    if (remainder >= denominator) {
+      remainder -= denominator;
+      quotient |= (1u << i);
+    }
+  }
+
+  return quotient;
 }
 
 int32_t WebRtcSpl_DivW32W16(int32_t num, int16_t den) {
+  webrtcvad_last_div_num = num;
+  webrtcvad_last_div_den = den;
   // Guard against division with 0
-  if (den != 0) {
-    return (int32_t)(num / den);
-  } else {
+  if (den == 0) {
     return (int32_t)0x7FFFFFFF;
   }
+
+  if (den == -1 && num == INT32_MIN) {
+    return (int32_t)0x7FFFFFFF;
+  }
+
+  int sign = 1;
+  uint64_t numerator = (uint64_t)num;
+  if (num < 0) {
+    sign = -sign;
+    numerator = (uint64_t)(-(int64_t)num);
+  }
+
+  uint64_t denominator = (uint64_t)den;
+  if (den < 0) {
+    sign = -sign;
+    denominator = (uint64_t)(-(int64_t)den);
+  }
+
+  uint64_t quotient = 0;
+  uint64_t remainder = 0;
+
+  int i;
+  for (i = 31; i >= 0; --i) {
+    remainder = (remainder << 1) | ((numerator >> i) & 1u);
+    if (remainder >= denominator) {
+      remainder -= denominator;
+      quotient |= (1ull << i);
+    }
+  }
+
+  if (sign < 0) {
+    if (quotient > 0x80000000ull) {
+      return (int32_t)0x80000000;
+    }
+    return -(int32_t)quotient;
+  }
+
+  if (quotient > 0x7FFFFFFFull) {
+    return (int32_t)0x7FFFFFFF;
+  }
+
+  return (int32_t)quotient;
 }
 
 int16_t WebRtcSpl_DivW32W16ResW16(int32_t num, int16_t den) {
+  webrtcvad_last_div_num = num;
+  webrtcvad_last_div_den = den;
   // Guard against division with 0
-  if (den != 0) {
-    return (int16_t)(num / den);
-  } else {
+  if (den == 0) {
     return (int16_t)0x7FFF;
   }
+
+  if (den == -1 && num == INT32_MIN) {
+    return (int16_t)0x7FFF;
+  }
+
+  int32_t value = WebRtcSpl_DivW32W16(num, den);
+  if (value > 32767) {
+    return (int16_t)0x7FFF;
+  }
+  if (value < -32768) {
+    return (int16_t)0x8000;
+  }
+  return (int16_t)value;
 }
 
 int32_t WebRtcSpl_DivResultInQ31(int32_t num, int32_t den) {

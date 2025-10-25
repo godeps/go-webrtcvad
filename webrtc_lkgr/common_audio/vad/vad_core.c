@@ -361,11 +361,17 @@ static int16_t GmmProbability(VadInstT* self,
           tmp2_s32 = tmp1_s32 >> 4;  // Q20
 
           // 0.1 * Q20 / Q7 = Q13.
-          if (tmp2_s32 > 0) {
-            tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(tmp2_s32, ssk * 10);
-          } else {
-            tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(-tmp2_s32, ssk * 10);
-            tmp_s16 = -tmp_s16;
+          {
+            int32_t speech_denom = (int32_t)ssk * 10;
+            if (speech_denom == 0) {
+              speech_denom = 10;
+            }
+            if (tmp2_s32 > 0) {
+              tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(tmp2_s32, (int16_t)speech_denom);
+            } else {
+              tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(-tmp2_s32, (int16_t)speech_denom);
+              tmp_s16 = (int16_t)(-tmp_s16);
+            }
           }
           // Divide by 4 giving an update factor of 0.025 (= 0.1 / 4).
           // Note that division by 4 equals shift by 2, hence,
@@ -393,11 +399,17 @@ static int16_t GmmProbability(VadInstT* self,
           tmp1_s32 = tmp2_s32 >> 14;
 
           // Q20 / Q7 = Q13.
-          if (tmp1_s32 > 0) {
-            tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(tmp1_s32, nsk);
-          } else {
-            tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(-tmp1_s32, nsk);
-            tmp_s16 = -tmp_s16;
+          {
+            int16_t noise_denom = nsk;
+            if (noise_denom == 0) {
+              noise_denom = 1;
+            }
+            if (tmp1_s32 > 0) {
+              tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(tmp1_s32, noise_denom);
+            } else {
+              tmp_s16 = (int16_t)WebRtcSpl_DivW32W16(-tmp1_s32, noise_denom);
+              tmp_s16 = (int16_t)(-tmp_s16);
+            }
           }
           tmp_s16 += 32;        // Rounding
           nsk += tmp_s16 >> 6;  // Q13 >> 6 = Q7.
