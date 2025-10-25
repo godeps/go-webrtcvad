@@ -1,22 +1,35 @@
 #!/usr/bin/env bash
-set -euo pipefail
+#set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${REPO_ROOT}"
 
-
-#  https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
-
-
-DEFAULT_ZIG_HOME="${REPO_ROOT}/../zig-x86_64-linux-0.15.2"
+DEFAULT_ZIG_HOME="${REPO_ROOT}/zig-x86_64-linux-0.15.2"
 ZIG_HOME="${ZIG_HOME:-$DEFAULT_ZIG_HOME}"
+echo "Using ZIG_HOME=${ZIG_HOME}" >&2
 ZIG_BIN="${ZIG_HOME}/zig"
 
-if [[ ! -x "${ZIG_BIN}" ]]; then
-  echo "error: zig compiler not found at ${ZIG_BIN}" >&2
-  echo "set ZIG_HOME to your zig 0.15.2 directory or install it at ${DEFAULT_ZIG_HOME}" >&2
-  exit 1
-fi
+ensure_zig() {
+	if [[ -x "${ZIG_BIN}" ]]; then
+		return 0
+	fi
+
+	local url="https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+	local tarball="${REPO_ROOT}/zig-x86_64-linux-0.15.2.tar.xz"
+
+	echo "zig 0.15.2 not found, downloading..."
+	curl -L "${url}" -o "${tarball}"
+	tar -xf "${tarball}" -C "${REPO_ROOT}"
+	rm -f "${tarball}"
+	echo "zig extracted, verifying ${ZIG_BIN}" >&2
+	if [[ ! -x "${ZIG_BIN}" ]]; then
+		ls -la "$(dirname "${ZIG_BIN}")" >&2 || true
+		echo "error: failed to install zig at ${ZIG_BIN}" >&2
+		exit 1
+	fi
+}
+
+ensure_zig
 
 BUILD_DIR="${REPO_ROOT}/wasm-bridge/build"
 mkdir -p "${BUILD_DIR}"

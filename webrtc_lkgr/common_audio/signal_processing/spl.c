@@ -1,4 +1,5 @@
 #include "common_audio/signal_processing/spl.h"
+#include "common_audio/signal_processing/resample_by_2_internal.h"
 
 const int8_t kWebRtcSpl_CountLeadingZeros32_Table[64] = {
     32, 8,  17, -1, -1, 14, -1, -1, -1, 20, -1, -1, -1, 28, -1, 18,

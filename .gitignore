@@ -11,5 +11,9 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Local zig toolchains downloaded by build_wasm.sh
+zig-x86_64-linux-0.15.2
+zig-*.tar.xz
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
