@@ -1,4 +1,4 @@
-module github.com/baabaaox/go-webrtcvad
+module github.com/godeps/go-webrtcvad
 
 go 1.22.0
 
