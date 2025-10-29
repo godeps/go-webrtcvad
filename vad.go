@@ -9,6 +9,7 @@ import (
 // VadInst represents a VAD instance stored inside the wasm module.
 type VadInst struct {
 	ptr uint32
+	ctx *wasmContext
 }
 
 // Create creates an instance of the WebRTC VAD.
@@ -20,27 +21,29 @@ func Create() VadInst {
 		return VadInst{}
 	}
 
+	wc.mu.Lock()
 	ptr, err := wc.callUint32(ctx, wc.functions.create)
+	wc.mu.Unlock()
 	if err != nil || ptr == 0 {
+		releaseWasmContext(wc)
 		return VadInst{}
 	}
 
-	return VadInst{ptr: ptr}
+	return VadInst{ptr: ptr, ctx: wc}
 }
 
 // Free releases the dynamic memory of a specified VAD instance.
 func Free(v VadInst) {
-	if v.ptr == 0 {
+	if v.ptr == 0 || v.ctx == nil {
 		return
 	}
 
 	ctx := context.Background()
-	wc, err := getWasmContext(ctx)
-	if err != nil {
-		return
-	}
-
+	wc := v.ctx
+	wc.mu.Lock()
 	_ = wc.callVoid(ctx, wc.functions.destroy, uint64(v.ptr))
+	wc.mu.Unlock()
+	releaseWasmContext(wc)
 }
 
 // Init initialises a VAD instance.
@@ -49,11 +52,15 @@ func Init(v VadInst) error {
 		return errors.New("vad instance is uninitialised")
 	}
 
-	ctx := context.Background()
-	wc, err := getWasmContext(ctx)
-	if err != nil {
-		return err
+	if v.ctx == nil {
+		return errors.New("vad instance context is uninitialised")
 	}
+
+	ctx := context.Background()
+	wc := v.ctx
+
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
 
 	result, err := wc.callInt32(ctx, wc.functions.init, uint64(v.ptr))
 	if err != nil {
@@ -71,11 +78,15 @@ func SetMode(v VadInst, mode int) error {
 		return errors.New("vad instance is uninitialised")
 	}
 
-	ctx := context.Background()
-	wc, err := getWasmContext(ctx)
-	if err != nil {
-		return err
+	if v.ctx == nil {
+		return errors.New("vad instance context is uninitialised")
 	}
+
+	ctx := context.Background()
+	wc := v.ctx
+
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
 
 	result, err := wc.callInt32(ctx, wc.functions.setMode, uint64(v.ptr), uint64(uint32(mode)))
 	if err != nil {
@@ -93,6 +104,10 @@ func Process(v VadInst, fs int, audioFrame []byte, frameLength int) (bool, error
 		return false, errors.New("vad instance is uninitialised")
 	}
 
+	if v.ctx == nil {
+		return false, errors.New("vad instance context is uninitialised")
+	}
+
 	if frameLength <= 0 {
 		return false, fmt.Errorf("invalid frame length: %d", frameLength)
 	}
@@ -106,10 +121,10 @@ func Process(v VadInst, fs int, audioFrame []byte, frameLength int) (bool, error
 	}
 
 	ctx := context.Background()
-	wc, err := getWasmContext(ctx)
-	if err != nil {
-		return false, err
-	}
+	wc := v.ctx
+
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
 
 	framePtr, err := wc.writeToMemory(ctx, audioFrame[:expectedBytes])
 	if err != nil {
@@ -150,6 +165,10 @@ func ValidRateAndFrameLength(rate int, frameLength int) bool {
 	if err != nil {
 		return false
 	}
+
+	wc.mu.Lock()
+	defer releaseWasmContext(wc)
+	defer wc.mu.Unlock()
 
 	result, err := wc.callInt32(
 		ctx,

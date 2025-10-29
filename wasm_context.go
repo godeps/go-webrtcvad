@@ -3,7 +3,9 @@ package webrtcvad
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -31,12 +33,23 @@ type wasmContext struct {
 	module    api.Module
 	memory    api.Memory
 	functions wasmFunctions
+	mu        sync.Mutex
+}
+
+type wasmContextPool struct {
+	ch chan *wasmContext
 }
 
 var (
 	globalWasmContext *wasmContext
 	wasmInitOnce      sync.Once
 	wasmInitErr       error
+	wasmRuntime       wazero.Runtime
+	wasmCompiled      wazero.CompiledModule
+	wasmModuleConfig  wazero.ModuleConfig
+	wasmPool          *wasmContextPool
+	wasmCloseOnce     sync.Once
+	moduleNameCounter uint64
 )
 
 func getWasmContext(ctx context.Context) (*wasmContext, error) {
@@ -47,67 +60,187 @@ func getWasmContext(ctx context.Context) (*wasmContext, error) {
 		compiled, err := rt.CompileModule(ctx, vadWasmBinary)
 		if err != nil {
 			wasmInitErr = fmt.Errorf("compile wasm: %w", err)
-			rt.Close(ctx)
+			_ = rt.Close(ctx)
 			return
 		}
 
-		mod, err := rt.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithName("webrtcvad"))
-		if err != nil {
-			wasmInitErr = fmt.Errorf("instantiate wasm: %w", err)
-			compiled.Close(ctx)
-			rt.Close(ctx)
-			return
+		wasmRuntime = rt
+		wasmCompiled = compiled
+		wasmModuleConfig = wazero.NewModuleConfig()
+
+		poolSize := runtime.NumCPU()
+		if poolSize < 2 {
+			poolSize = 2
 		}
+		wasmPool = newWasmContextPool(poolSize)
 
-		memory := mod.ExportedMemory("memory")
-		if memory == nil {
-			wasmInitErr = fmt.Errorf("wasm memory export not found")
-			mod.Close(ctx)
-			compiled.Close(ctx)
-			rt.Close(ctx)
-			return
-		}
-
-		load := func(name string) api.Function {
-			fn := mod.ExportedFunction(name)
-			if fn == nil && wasmInitErr == nil {
-				wasmInitErr = fmt.Errorf("wasm function %s not found", name)
-			}
-			return fn
-		}
-
-		functions := wasmFunctions{
-			malloc:  load("malloc"),
-			free:    load("free"),
-			create:  load("bridge_vad_create"),
-			destroy: load("bridge_vad_free"),
-			init:    load("bridge_vad_init"),
-			setMode: load("bridge_vad_set_mode"),
-			process: load("bridge_vad_process"),
-			valid:   load("bridge_vad_valid_rate_and_frame_length"),
-		}
-
-		compiled.Close(ctx)
-
+		globalWasmContext, wasmInitErr = newWasmContext(ctx)
 		if wasmInitErr != nil {
-			mod.Close(ctx)
-			rt.Close(ctx)
+			wasmPool = nil
+			_ = compiled.Close(ctx)
+			_ = rt.Close(ctx)
 			return
 		}
 
-		globalWasmContext = &wasmContext{
-			runtime:   rt,
-			module:    mod,
-			memory:    memory,
-			functions: functions,
-		}
+		wasmPool.put(globalWasmContext)
 	})
 
 	if wasmInitErr != nil {
 		return nil, wasmInitErr
 	}
 
-	return globalWasmContext, nil
+	return wasmPool.get(ctx)
+}
+
+func releaseWasmContext(wc *wasmContext) {
+	if wasmPool == nil {
+		if wc != nil {
+			wc.close(context.Background())
+		}
+		return
+	}
+	wasmPool.put(wc)
+}
+
+func newWasmContextPool(size int) *wasmContextPool {
+	return &wasmContextPool{ch: make(chan *wasmContext, size)}
+}
+
+func (p *wasmContextPool) get(ctx context.Context) (*wasmContext, error) {
+	if p == nil {
+		return nil, fmt.Errorf("wasm context pool is uninitialised")
+	}
+	select {
+	case wc := <-p.ch:
+		if wc == nil {
+			return nil, fmt.Errorf("retrieved nil wasm context from pool")
+		}
+		return wc, nil
+	default:
+	}
+	return newWasmContext(ctx)
+}
+
+func (p *wasmContextPool) put(wc *wasmContext) {
+	if p == nil || wc == nil {
+		return
+	}
+	select {
+	case p.ch <- wc:
+	default:
+		wc.close(context.Background())
+	}
+}
+
+func (p *wasmContextPool) close(ctx context.Context) {
+	if p == nil {
+		return
+	}
+	for {
+		select {
+		case wc := <-p.ch:
+			if wc != nil {
+				wc.close(ctx)
+			}
+		default:
+			return
+		}
+	}
+}
+
+func newWasmContext(ctx context.Context) (*wasmContext, error) {
+	if wasmRuntime == nil || wasmCompiled == nil || wasmModuleConfig == nil {
+		return nil, fmt.Errorf("wasm runtime is uninitialised")
+	}
+
+	name := fmt.Sprintf("webrtcvad-%d", atomic.AddUint64(&moduleNameCounter, 1))
+	cfg := wasmModuleConfig.WithName(name)
+
+	mod, err := wasmRuntime.InstantiateModule(ctx, wasmCompiled, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("instantiate wasm: %w", err)
+	}
+
+	memory := mod.ExportedMemory("memory")
+	if memory == nil {
+		mod.Close(ctx)
+		return nil, fmt.Errorf("wasm memory export not found")
+	}
+
+	load := func(fnName string) (api.Function, error) {
+		fn := mod.ExportedFunction(fnName)
+		if fn == nil {
+			return nil, fmt.Errorf("wasm function %s not found", fnName)
+		}
+		return fn, nil
+	}
+
+	mallocFn, err := load("malloc")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	freeFn, err := load("free")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	createFn, err := load("bridge_vad_create")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	destroyFn, err := load("bridge_vad_free")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	initFn, err := load("bridge_vad_init")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	setModeFn, err := load("bridge_vad_set_mode")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	processFn, err := load("bridge_vad_process")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+	validFn, err := load("bridge_vad_valid_rate_and_frame_length")
+	if err != nil {
+		mod.Close(ctx)
+		return nil, err
+	}
+
+	return &wasmContext{
+		runtime: wasmRuntime,
+		module:  mod,
+		memory:  memory,
+		functions: wasmFunctions{
+			malloc:  mallocFn,
+			free:    freeFn,
+			create:  createFn,
+			destroy: destroyFn,
+			init:    initFn,
+			setMode: setModeFn,
+			process: processFn,
+			valid:   validFn,
+		},
+	}, nil
+}
+
+func (wc *wasmContext) close(ctx context.Context) {
+	if wc == nil || wc.module == nil {
+		return
+	}
+	_ = wc.module.Close(ctx)
+	wc.module = nil
+	wc.memory = nil
+	wc.functions = wasmFunctions{}
 }
 
 func (wc *wasmContext) callUint32(ctx context.Context, fn api.Function, args ...uint64) (uint32, error) {
@@ -187,4 +320,42 @@ func (wc *wasmContext) writeToMemory(ctx context.Context, data []byte) (uint32, 
 		return 0, fmt.Errorf("failed to write %d bytes to wasm memory at %d", len(data), ptr)
 	}
 	return ptr, nil
+}
+
+// Shutdown releases all pooled contexts and closes the underlying wasm runtime.
+// It should be called when the application no longer needs the VAD.
+func Shutdown(ctx context.Context) error {
+	var shutdownErr error
+	wasmCloseOnce.Do(func() {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
+		if wasmPool != nil {
+			wasmPool.close(ctx)
+			wasmPool = nil
+		}
+
+		globalWasmContext = nil
+
+		if wasmCompiled != nil {
+			if err := wasmCompiled.Close(ctx); err != nil {
+				shutdownErr = err
+			}
+			wasmCompiled = nil
+		}
+
+		if wasmRuntime != nil {
+			if err := wasmRuntime.Close(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+			wasmRuntime = nil
+		}
+
+		wasmModuleConfig = nil
+		if shutdownErr == nil {
+			wasmInitErr = fmt.Errorf("wasm runtime shut down")
+		}
+	})
+	return shutdownErr
 }

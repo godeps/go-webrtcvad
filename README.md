@@ -8,6 +8,13 @@ This project rewrite from [maxhawkins/go-webrtcvad](https://github.com/maxhawkin
 
 The WebRTC source code download form [WebRTC lkgr commit [8e55dca89f4e39241f9e3ecd25ab0ebbf5d1ab37]](https://webrtc.googlesource.com/src/+/8e55dca89f4e39241f9e3ecd25ab0ebbf5d1ab37).
 
+## Thread safety
+
+- Multiple goroutines can now share a `VadInst` because each instance holds an exclusive lock while calling the underlying wasm exports.
+- A pool of wasm module instances backs the API so callers keep reusing warmed wasm contexts instead of recompiling or re-instantiating on every `Create`.
+- `Free` returns the context to the pool, and helpers such as `ValidRateAndFrameLength` temporarily borrow pooled instances behind the same public API.
+- `go test ./...` is enough to validate the changes; add `go test -race ./...` when you need runtime race detection.
+
 ## Installation
 
 ```shell
